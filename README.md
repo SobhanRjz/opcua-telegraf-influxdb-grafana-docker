@@ -77,13 +77,15 @@ GF_SECURITY_ADMIN_USER: admin
 GF_SECURITY_ADMIN_PASSWORD: admin
 ```
 
-## 📊 Data Flow
+##  Data Flow
 
 1. **OPC UA Servers** → Industrial devices and PLCs send data via OPC UA protocol
 2. **Telegraf** → Collects, processes, and transforms industrial data
 3. **InfluxDB** → Stores time-series data with high performance
 4. **Grafana** → Provides real-time visualization and dashboards
 5. **Prometheus** → Monitors the pipeline health and performance
+
+![Dashboard Panel](docs/panel.png)
 
 ## 🔧 Usage Guide
 
