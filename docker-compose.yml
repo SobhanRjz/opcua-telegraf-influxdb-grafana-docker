@@ -1,0 +1,155 @@
+version: "3.9"
+
+# ----------------- NETWORKS -----------------
+networks:
+  monitoring:
+    driver: bridge
+
+# ----------------- VOLUMES ------------------
+volumes:
+  grafana_data:
+  influxdb2_data:
+  prometheus_data:
+
+# ----------------- GLOBAL LOGGING -----------
+x-logging: &default-logging
+  driver: "json-file"
+  options:
+    max-size: "10m"
+    max-file: "5"
+
+services:
+  # ---------- INFLUXDB 2.7 (time-series DB) ----------
+  influxdb:
+    image: influxdb:2.7.12
+    container_name: influxdb
+    restart: unless-stopped
+    environment:
+      DOCKER_INFLUXDB_INIT_MODE: setup
+      DOCKER_INFLUXDB_INIT_USERNAME: admin
+      DOCKER_INFLUXDB_INIT_PASSWORD: admin_password   # change in real use
+      DOCKER_INFLUXDB_INIT_ORG: local-org
+      DOCKER_INFLUXDB_INIT_BUCKET: telegraf
+      DOCKER_INFLUXDB_INIT_RETENTION: 0               # 0 = infinite
+      DOCKER_INFLUXDB_INIT_ADMIN_TOKEN: local-admin-token
+    ports:
+      - "8086:8086"
+    volumes:
+      - influxdb2_data:/var/lib/influxdb2
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8086/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - monitoring
+    logging: *default-logging
+
+  # ---------- TELEGRAF (main: system + docker) ----------
+  telegraf:
+    image: telegraf:1.36.3
+    container_name: telegraf
+    restart: unless-stopped
+    depends_on:
+      - influxdb
+      - nginx
+    environment:
+      # used by outputs.influxdb_v2 in telegraf.conf
+      INFLUX_TOKEN: local-admin-token
+    volumes:
+      - ./telegraf/telegraf.conf:/etc/telegraf/telegraf.conf:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro  # docker metrics
+    ports:
+      - "8125:8125/udp"    # StatsD input if you use it
+    networks:
+      - monitoring
+    logging: *default-logging
+
+  # ---------- TELEGRAF (second: extra StatsD) ----------
+  telegraf_second:
+    image: telegraf:1.36.3
+    container_name: telegraf_second
+    restart: unless-stopped
+    depends_on:
+      - influxdb
+    environment:
+      INFLUX_TOKEN: local-admin-token
+    volumes:
+      - ./telegraf/telegraf_second.conf:/etc/telegraf/telegraf.conf:ro
+    ports:
+      - "8126:8126/udp"
+    networks:
+      - monitoring
+    logging: *default-logging
+
+  # ---------- NGINX (for your own tests / apps) ----------
+  nginx:
+    image: nginx:1.29.3-alpine3.22-slim
+    container_name: nginx
+    restart: unless-stopped
+    volumes:
+      - ./nginx:/etc/nginx/conf.d
+    ports:
+      - "8080:80"
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost" ]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+    networks:
+      - monitoring
+    logging: *default-logging
+
+  # ---------- PROMETHEUS 3.7 (for dashboard 1860) ----------
+  prometheus:
+    image: prom/prometheus:v3.7.3
+    container_name: prometheus
+    restart: unless-stopped
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus_data:/prometheus
+    ports:
+      - "9090:9090"
+    networks:
+      - monitoring
+    logging: *default-logging
+
+  # ---------- NODE EXPORTER 1.10 (host metrics for 1860) ----------
+  node_exporter:
+    image: prom/node-exporter:v1.10.2
+    container_name: node_exporter
+    restart: unless-stopped
+    # these mounts let it see the Docker host system
+    volumes:
+      - /proc:/host/proc:ro
+      - /sys:/host/sys:ro
+      - /:/rootfs:ro
+    command:
+      - '--path.procfs=/host/proc'
+      - '--path.sysfs=/host/sys'
+      - '--collector.filesystem.ignored-mount-points=^/(sys|proc|dev|host|etc)($$|/)'
+    ports:
+      - "9100:9100"
+    networks:
+      - monitoring
+    logging: *default-logging
+
+  # ---------- GRAFANA 12.3 (dashboards) ----------
+  grafana:
+    image: grafana/grafana:12.3.0-18578466485
+    container_name: grafana
+    restart: unless-stopped
+    depends_on:
+      - influxdb
+      - prometheus
+    environment:
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: admin
+      GF_USERS_ALLOW_SIGN_UP: "false"
+    ports:
+      - "3000:3000"
+    volumes:
+      - grafana_data:/var/lib/grafana
+    networks:
+      - monitoring
+    logging: *default-logging
